@@ -1,55 +1,90 @@
 package gateway
 
 import (
-	"net"
-	"bufio"
+	"crypto/tls"
+	"encoding/gob"
+	"errors"
 	"github.com/mikespook/golib/log"
+	"github.com/mikespook/x"
+	"io"
+	"net"
 )
 
 type _Agent struct {
-	gw *Gateway
-	wr *bufio.ReadWriter
+	gw      *Gateway
+	decoder *gob.Decoder
+	encoder *gob.Encoder
+	conn    net.Conn
+	authed  bool
 }
 
 func newAgent(gw *Gateway, conn net.Conn) (agent *_Agent) {
-	return &_Agent{
-		gw: gw,
+	agent = &_Agent{
+		gw:   gw,
 		conn: conn,
 	}
+	if gw.tlsConfig != nil {
+		agent.conn = tls.Client(agent.conn, gw.tlsConfig)
+	}
+	agent.decoder = gob.NewDecoder(agent.conn)
+	agent.encoder = gob.NewEncoder(agent.conn)
+	return
 }
 
-func(gw *Gateway) msgf(format string, msg ... interface{}) {
-	if gw.logger != nil {
-		gw.logger.Messagef(format, msg ...)
+func (agent *_Agent) Close() {
+	if err := agent.conn.Close(); err != nil {
+		log.Error(err)
 	}
 }
 
-func(gw *Gateway) err(err error) {
-	if gw.logger != nil {
-		gw.logger.Error(err)
-	}
-}
-
-func(gw *Gateway) SetLogger(logger *log.Logger) {
-	gw.logger = logger
-}
-
-func newAgent(gw *Gateway, conn net.Conn) {
-	defer func() {
-		gw.msgf("The connection terminated: %s => %s", conn.RemoteAddr(), conn.LocalAddr())
-		if err := conn.Close(); err != nil {
-			gw.err(err)
-		}
-	}()
-	gw.msgf("New connection established: %s => %s", conn.RemoteAddr(), conn.LocalAddr())
-	
-	r := bufio.NewReader(conn)
-	w := bufio.NewWriter(conn)
-	rw := bufio.NewReadWriter(r, w)
+func (agent *_Agent) Serve() {
+	var pack x.Pack
 	for {
-		l, p, err := rw.ReadLine()
-		gw.msgf("%s, %b, %s", l, p, err)
-		rw.Write(l)
-		rw.Flush()
+		if err := agent.decoder.Decode(&pack); err != nil {
+			if _, ok := err.(*net.OpError); !ok && err != io.EOF {
+				log.Error(err)
+			}
+			break
+		}
+		switch pack := a.Data.(type) {
+		case *x.SignIn:
+			if pack.Auth(agent.gw.secret) {
+				agent.gw.Registe(agent)
+			} else {
+				agent.Write(x.Bye("Auth faild!"))
+				return
+			}
+		default:
+			go agent.handle(pack)
+		}
 	}
+}
+
+func (agent *_Agent) handle(pack x.Pack) {
+	log.Debug(pack)
+}
+
+func (agent *_Agent) Write(data interface{}) (err error) {
+	var pack x.Pack
+	pack.Data = data
+	for {
+		err = agent.encoder.Encode(pack)
+		if opErr, ok := err.(*net.OpError); ok { // is OpError
+			if opErr.Temporary() { // is Temporary
+				continue
+			} else { // Reconnect
+				if err = agent.Dial(); err != nil {
+					return
+				}
+			}
+			continue
+		} else { // isn't OpError
+			if err == io.EOF {
+				err = nil
+			}
+			return
+		}
+		break
+	}
+	return
 }

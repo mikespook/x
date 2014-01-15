@@ -1,11 +1,12 @@
 package x
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"encoding/gob"
 	"io"
 	"strconv"
-	"crypto/sha1"
 	"time"
-	"bytes"
 )
 
 const (
@@ -13,41 +14,43 @@ const (
 	Event
 )
 
-type Hello struct {
-	Agent uint
-	Token []byte
-	Time time.Time
+func init() {
+	gob.Register(&SignIn{})
+	gob.Register(Hello("hello"))
+	gob.Register(Bye("bye"))
 }
 
-func NewHello(agent uint, secret string) *Hello {
+type SignIn struct {
+	Agent uint
+	Token []byte
+	Time  time.Time
+}
+
+func NewSignIn(agent uint, secret string) *SignIn {
 	h := sha1.New()
 	now := time.Now()
 	io.WriteString(h, strconv.Itoa(int(agent)))
 	io.WriteString(h, now.String())
 	io.WriteString(h, secret)
-	return &Hello{
+	return &SignIn{
 		Agent: agent,
 		Token: h.Sum(nil),
-		Time: now,
+		Time:  now,
 	}
 }
 
-func (hello *Hello) Auth(secret string) bool {
+func (signIn *SignIn) Auth(secret string) bool {
 	h := sha1.New()
-	io.WriteString(h, strconv.Itoa(int(hello.Agent)))
-	io.WriteString(h, hello.Time.String())
+	io.WriteString(h, strconv.Itoa(int(signIn.Agent)))
+	io.WriteString(h, signIn.Time.String())
 	io.WriteString(h, secret)
-	return bytes.Compare(h.Sum(nil), hello.Token) == 0
+	return bytes.Compare(h.Sum(nil), signIn.Token) == 0
 }
 
-type Pack interface {
-	Bye() bool
-}
+type Hello string
 
-type Inpack struct {
-	Type uint
-}
+type Bye string
 
-type Outpack struct {
-	Type uint
+type Pack struct {
+	Data interface{}
 }

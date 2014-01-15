@@ -11,11 +11,12 @@ import (
 )
 
 var (
-	netname	= flag.String("net", "tcp", "Network interface")
-	addr       = flag.String("addr", "127.0.0.1:8081", "Address of gateway")
-	tlsCert       = flag.String("tls-cert", "", "TLS cert file")
-	tlsKey        = flag.String("tls-key", "", "TLS key file")
-	pf         = flag.String("pid", "", "PID file")
+	netname = flag.String("net", "tcp", "Network interface")
+	addr    = flag.String("addr", "127.0.0.1:8081", "Address of gateway")
+	tlsCert = flag.String("tls-cert", "", "TLS cert file")
+	tlsKey  = flag.String("tls-key", "", "TLS key file")
+	pf      = flag.String("pid", "", "PID file")
+	secret  = flag.String("secret", "", "Secret key")
 )
 
 func init() {
@@ -40,8 +41,10 @@ func main() {
 		}
 	}
 	// Init Gateway
-	gw := gateway.New(*netname, *addr)
-	gw.SetLogger(log.DefaultLogger)
+	gw := gateway.New(*netname, *addr, *secret)
+	if *tlsCert != "" && *tlsKey != "" {
+		gw.SetTLS(*tlsCert, *tlsKey)
+	}
 	// Goroutine a Gateway logical
 	go func() {
 		if err := gw.Serve(); err != nil {
@@ -60,7 +63,7 @@ func main() {
 	sh.Bind(syscall.SIGUSR1, func() bool {
 		// Shutdown Gateway
 		gw.Close()
-		if err:= restart(); err != nil {
+		if err := restart(); err != nil {
 			log.Error(err)
 		}
 		return true
