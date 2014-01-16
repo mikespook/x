@@ -52,5 +52,6 @@ type Hello string
 type Bye string
 
 type Pack struct {
-	Data interface{}
+	From, To string
+	Data     interface{}
 }

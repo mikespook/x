@@ -3,22 +3,26 @@ package gateway
 import (
 	"crypto/tls"
 	"github.com/mikespook/golib/log"
+	"github.com/mikespook/x"
 	"labix.org/v2/mgo/bson"
 	"net"
+	"sync"
 )
 
 type Gateway struct {
 	network, addr, secret string
 	listener              net.Listener
 	tlsConfig             *tls.Config
-	agents                map[string]_Agent
+	agents                map[string]*_Agent
+	sync.RWMutex
 }
 
-func New(netname, addr, secret string) (gw *Gateway) {
+func New(network, addr, secret string) (gw *Gateway) {
 	return &Gateway{
-		netname: netname,
+		network: network,
 		addr:    addr,
 		secret:  secret,
+		agents:  make(map[string]*_Agent, 16),
 	}
 }
 
@@ -36,7 +40,7 @@ func (gw *Gateway) Close() {
 }
 
 func (gw *Gateway) Serve() (err error) {
-	gw.listener, err = net.Listen(gw.netname, gw.addr)
+	gw.listener, err = net.Listen(gw.network, gw.addr)
 	if err != nil {
 		return err
 	}
@@ -63,23 +67,31 @@ func (gw *Gateway) newAgent(conn net.Conn) {
 	agent := newAgent(gw, conn)
 	defer agent.Close()
 	agent.Serve()
-	defer agent.Unregister(agent)
+	defer gw.unregister(agent)
 }
 
-func (gw *Gateway) register(agent *_Agent) (err error) {
-	id := gw.getId()
-	if err = agent.Write(x.Hello(id)); err != nil {
+func (gw *Gateway) register(role uint, agent *_Agent) (err error) {
+	gw.Lock()
+	defer gw.Unlock()
+	agent.id = gw.getId()
+	if err = agent.Write(x.Hello(agent.id)); err != nil {
 		return
 	}
-	gw.agents[id] = agent
+	agent.role = role
+	gw.agents[agent.id] = agent
+	log.Messagef("The agent registered: %x", agent.id)
+	return
 }
 
 func (gw *Gateway) unregister(agent *_Agent) {
-	if agent.Id != nil {
-		delete(gw.agents, agent.Id)
+	gw.Lock()
+	defer gw.Unlock()
+	if agent.id != "" {
+		delete(gw.agents, agent.id)
+		log.Messagef("The agent unregistered: %x", agent.id)
 	}
 }
 
 func (gw *Gateway) getId() string {
-	return bson.NewObjectId().String()
+	return string(bson.NewObjectId())
 }

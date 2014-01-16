@@ -3,7 +3,6 @@ package gateway
 import (
 	"crypto/tls"
 	"encoding/gob"
-	"errors"
 	"github.com/mikespook/golib/log"
 	"github.com/mikespook/x"
 	"io"
@@ -16,6 +15,8 @@ type _Agent struct {
 	encoder *gob.Encoder
 	conn    net.Conn
 	authed  bool
+	id      string
+	role    uint
 }
 
 func newAgent(gw *Gateway, conn net.Conn) (agent *_Agent) {
@@ -46,21 +47,21 @@ func (agent *_Agent) Serve() {
 			}
 			break
 		}
-		switch pack := a.Data.(type) {
+		switch p := pack.Data.(type) {
 		case *x.SignIn:
-			if pack.Auth(agent.gw.secret) {
-				agent.gw.Registe(agent)
+			if p.Auth(agent.gw.secret) {
+				agent.gw.register(p.Agent, agent)
 			} else {
 				agent.Write(x.Bye("Auth faild!"))
 				return
 			}
 		default:
-			go agent.handle(pack)
+			go agent.handle(&pack)
 		}
 	}
 }
 
-func (agent *_Agent) handle(pack x.Pack) {
+func (agent *_Agent) handle(pack *x.Pack) {
 	log.Debug(pack)
 }
 
@@ -72,12 +73,9 @@ func (agent *_Agent) Write(data interface{}) (err error) {
 		if opErr, ok := err.(*net.OpError); ok { // is OpError
 			if opErr.Temporary() { // is Temporary
 				continue
-			} else { // Reconnect
-				if err = agent.Dial(); err != nil {
-					return
-				}
 			}
-			continue
+			err = opErr
+			return
 		} else { // isn't OpError
 			if err == io.EOF {
 				err = nil
