@@ -3,6 +3,7 @@ package x
 import (
 	"crypto/tls"
 	"encoding/gob"
+	"github.com/mikespook/golib/iptpool"
 	"net"
 )
 
@@ -14,12 +15,14 @@ type agent struct {
 	authed  bool
 	id      string
 	role    uint
+	ipt     iptpool.ScriptIpt
 }
 
 func newAgent(gw *Gateway, conn net.Conn) (a *agent) {
 	a = &agent{
 		gw:   gw,
 		conn: conn,
+		ipt:  gw.iptPool.Get(),
 	}
 	if gw.tlsConfig != nil {
 		a.conn = tls.Client(a.conn, gw.tlsConfig)
@@ -34,10 +37,14 @@ func (a *agent) Close() (err error) {
 		err = a.conn.Close()
 		a.conn = nil
 	}
+	a.gw.unregister(a)
 	return
 }
 
 func (a *agent) Loop() (err error) {
+	defer func() {
+		a.gw.iptPool.Put(a.ipt)
+	}()
 	var pack Pack
 	for {
 		if err := a.decoder.Decode(&pack); err != nil {
@@ -63,7 +70,7 @@ func (a *agent) Loop() (err error) {
 }
 
 func (a *agent) handle(pack *Pack) {
-//	log.Debug(pack)
+
 }
 
 func (a *agent) Write(data interface{}) (err error) {

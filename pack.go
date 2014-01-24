@@ -5,8 +5,8 @@ import (
 	"crypto/sha1"
 	"encoding/gob"
 	"io"
-	"time"
 	"net"
+	"time"
 )
 
 func init() {

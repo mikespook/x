@@ -2,11 +2,12 @@ package x
 
 import (
 	"crypto/tls"
+	"github.com/mikespook/golib/iptpool"
 	"github.com/mikespook/golib/log"
 	"labix.org/v2/mgo/bson"
 	"net"
-	"sync"
 	"sort"
+	"sync"
 )
 
 type Gateway struct {
@@ -15,7 +16,8 @@ type Gateway struct {
 	tlsConfig             *tls.Config
 	agents                map[string]*agent
 	groups                map[string]sort.StringSlice
-	mutex sync.RWMutex
+	mutex                 sync.RWMutex
+	iptPool               *iptpool.IptPool
 }
 
 func New(network, addr, secret string) (gw *Gateway) {
@@ -24,6 +26,7 @@ func New(network, addr, secret string) (gw *Gateway) {
 		addr:    addr,
 		secret:  secret,
 		agents:  make(map[string]*agent, 16),
+		iptPool: iptpool.NewIptPool(newLuaIpt),
 	}
 }
 
@@ -70,7 +73,6 @@ func (gw *Gateway) newAgent(conn net.Conn) {
 	if err := agent.Loop(); err != nil {
 		log.Error(err)
 	}
-	defer gw.unregister(agent)
 }
 
 func (gw *Gateway) register(a *agent) (err error) {
