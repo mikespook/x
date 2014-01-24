@@ -1,20 +1,21 @@
-package gateway
+package x
 
 import (
 	"crypto/tls"
 	"github.com/mikespook/golib/log"
-	"github.com/mikespook/x"
 	"labix.org/v2/mgo/bson"
 	"net"
 	"sync"
+	"sort"
 )
 
 type Gateway struct {
 	network, addr, secret string
 	listener              net.Listener
 	tlsConfig             *tls.Config
-	agents                map[string]*_Agent
-	sync.RWMutex
+	agents                map[string]*agent
+	groups                map[string]sort.StringSlice
+	mutex sync.RWMutex
 }
 
 func New(network, addr, secret string) (gw *Gateway) {
@@ -22,7 +23,7 @@ func New(network, addr, secret string) (gw *Gateway) {
 		network: network,
 		addr:    addr,
 		secret:  secret,
-		agents:  make(map[string]*_Agent, 16),
+		agents:  make(map[string]*agent, 16),
 	}
 }
 
@@ -39,7 +40,7 @@ func (gw *Gateway) Close() {
 	}
 }
 
-func (gw *Gateway) Serve() (err error) {
+func (gw *Gateway) Loop() (err error) {
 	gw.listener, err = net.Listen(gw.network, gw.addr)
 	if err != nil {
 		return err
@@ -66,29 +67,30 @@ func (gw *Gateway) newAgent(conn net.Conn) {
 	log.Messagef("New connection established: %s => %s", conn.RemoteAddr(), conn.LocalAddr())
 	agent := newAgent(gw, conn)
 	defer agent.Close()
-	agent.Serve()
+	if err := agent.Loop(); err != nil {
+		log.Error(err)
+	}
 	defer gw.unregister(agent)
 }
 
-func (gw *Gateway) register(role uint, agent *_Agent) (err error) {
-	gw.Lock()
-	defer gw.Unlock()
-	agent.id = gw.getId()
-	if err = agent.Write(x.Hello(agent.id)); err != nil {
+func (gw *Gateway) register(a *agent) (err error) {
+	gw.mutex.Lock()
+	defer gw.mutex.Unlock()
+	a.id = gw.getId()
+	if err = a.Write(Hello(a.id)); err != nil {
 		return
 	}
-	agent.role = role
-	gw.agents[agent.id] = agent
-	log.Messagef("The agent registered: %x", agent.id)
+	gw.agents[a.id] = a
+	log.Messagef("The agent registered: %x", a.id)
 	return
 }
 
-func (gw *Gateway) unregister(agent *_Agent) {
-	gw.Lock()
-	defer gw.Unlock()
-	if agent.id != "" {
-		delete(gw.agents, agent.id)
-		log.Messagef("The agent unregistered: %x", agent.id)
+func (gw *Gateway) unregister(a *agent) {
+	gw.mutex.Lock()
+	defer gw.mutex.Unlock()
+	if a.id != "" {
+		delete(gw.agents, a.id)
+		log.Messagef("The agent unregistered: %x", a.id)
 	}
 }
 

@@ -3,133 +3,79 @@ package x
 import (
 	"crypto/tls"
 	"encoding/gob"
-	"errors"
-	"fmt"
-	"io"
 	"net"
 )
 
-var (
-	ErrNilHandler = errors.New("Agent.Handler is `nil`.")
-	ErrAccessDeny = errors.New("Access Deny")
-)
-
-type PackHandler func(Pack)
-
-type Agent struct {
-	network, addr, secret string
-	conn                  net.Conn
-	decoder               *gob.Decoder
-	encoder               *gob.Encoder
-	tlsConfig             *tls.Config
-
-	Id      string
-	Handler PackHandler
+type agent struct {
+	gw      *Gateway
+	decoder *gob.Decoder
+	encoder *gob.Encoder
+	conn    net.Conn
+	authed  bool
+	id      string
+	role    uint
 }
 
-func NewAgent(network, addr, secret string) *Agent {
-	return &Agent{
-		network: network,
-		addr:    addr,
-		secret:  secret,
+func newAgent(gw *Gateway, conn net.Conn) (a *agent) {
+	a = &agent{
+		gw:   gw,
+		conn: conn,
 	}
-}
-
-func (agent *Agent) Dial() (err error) {
-	if err = agent.Close(); err != nil {
-		return
+	if gw.tlsConfig != nil {
+		a.conn = tls.Client(a.conn, gw.tlsConfig)
 	}
-	if agent.conn, err = net.Dial(agent.network, agent.addr); err != nil {
-		return
-	}
-	if agent.tlsConfig != nil {
-		agent.conn = tls.Client(agent.conn, agent.tlsConfig)
-	}
-	agent.decoder = gob.NewDecoder(agent.conn)
-	agent.encoder = gob.NewEncoder(agent.conn)
+	a.decoder = gob.NewDecoder(a.conn)
+	a.encoder = gob.NewEncoder(a.conn)
 	return
 }
 
-func (agent *Agent) SetTLS(tlsCert, tlsKey string) (err error) {
-	agent.tlsConfig = &tls.Config{}
-	agent.tlsConfig.Certificates = make([]tls.Certificate, 1)
-	agent.tlsConfig.Certificates[0], err = tls.LoadX509KeyPair(tlsCert, tlsKey)
+func (a *agent) Close() (err error) {
+	if a.conn != nil {
+		err = a.conn.Close()
+		a.conn = nil
+	}
 	return
 }
 
-func (agent *Agent) Close() error {
-	if agent.conn != nil {
-		return agent.conn.Close()
-	}
-	return nil
-}
-
-func (agent *Agent) Serve() (err error) {
-	if agent.Handler == nil {
-		return ErrNilHandler
-	}
-	if err = agent.Dial(); err != nil {
-		return
-	}
-	hello := NewSignIn(Event, agent.secret)
-	if err = agent.Write(hello); err != nil {
-		return
-	}
+func (a *agent) Loop() (err error) {
+	var pack Pack
 	for {
-		var pack Pack
-		if err = agent.decoder.Decode(&pack); err != nil {
-			if e, ok := err.(*net.OpError); ok { // is OpError
-				if e.Temporary() { // is Temporary
-					continue
-				} else { // Reconnect
-					if err = agent.Dial(); err != nil {
-						return
-					}
-				}
-			} else { // isn't OpError
-				if err == io.EOF {
-					err = nil
-				}
-				return
+		if err := a.decoder.Decode(&pack); err != nil {
+			if fatal, err := IsFatal(err); fatal {
+				return err
+			} else {
+				continue
 			}
 		}
 		switch p := pack.Data.(type) {
-		case Hello:
-			agent.Id = string(p)
-		case Bye:
-			err = fmt.Errorf("%s", p)
-			return
-		default:
-			if agent.Id == "" {
-				err = ErrAccessDeny
+		case *SignIn:
+			if p.Auth(a.gw.secret) {
+				a.gw.register(a)
+			} else {
+				a.Write(Bye("Auth faild!"))
+				err = a.Close()
 				return
 			}
-			agent.Handler(pack)
-			// discards
+		default:
+			go a.handle(&pack)
 		}
 	}
-	return
 }
 
-func (agent *Agent) Write(data interface{}) (err error) {
+func (a *agent) handle(pack *Pack) {
+//	log.Debug(pack)
+}
+
+func (a *agent) Write(data interface{}) (err error) {
 	var pack Pack
 	pack.Data = data
 	for {
-		err = agent.encoder.Encode(pack)
-		if opErr, ok := err.(*net.OpError); ok { // is OpError
-			if opErr.Temporary() { // is Temporary
+		if err = a.encoder.Encode(pack); err != nil {
+			if fatal, err := IsFatal(err); fatal {
+				return err
+			} else {
 				continue
-			} else { // Reconnect
-				if err = agent.Dial(); err != nil {
-					return
-				}
 			}
-			continue
-		} else { // isn't OpError
-			if err == io.EOF {
-				err = nil
-			}
-			return
 		}
 		break
 	}

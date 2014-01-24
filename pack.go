@@ -5,13 +5,8 @@ import (
 	"crypto/sha1"
 	"encoding/gob"
 	"io"
-	"strconv"
 	"time"
-)
-
-const (
-	Gateway = iota
-	Event
+	"net"
 )
 
 func init() {
@@ -21,19 +16,16 @@ func init() {
 }
 
 type SignIn struct {
-	Agent uint
 	Token []byte
 	Time  time.Time
 }
 
-func NewSignIn(agent uint, secret string) *SignIn {
+func NewSignIn(secret string) *SignIn {
 	h := sha1.New()
 	now := time.Now()
-	io.WriteString(h, strconv.Itoa(int(agent)))
 	io.WriteString(h, now.String())
 	io.WriteString(h, secret)
 	return &SignIn{
-		Agent: agent,
 		Token: h.Sum(nil),
 		Time:  now,
 	}
@@ -41,7 +33,6 @@ func NewSignIn(agent uint, secret string) *SignIn {
 
 func (signIn *SignIn) Auth(secret string) bool {
 	h := sha1.New()
-	io.WriteString(h, strconv.Itoa(int(signIn.Agent)))
 	io.WriteString(h, signIn.Time.String())
 	io.WriteString(h, secret)
 	return bytes.Compare(h.Sum(nil), signIn.Token) == 0
@@ -54,4 +45,17 @@ type Bye string
 type Pack struct {
 	From, To string
 	Data     interface{}
+}
+
+func IsFatal(err error) (fatal bool, e error) {
+	if opErr, ok := err.(*net.OpError); ok { // is OpError
+		fatal = opErr.Temporary() == false
+		e = opErr
+	} else { // isn't OpError
+		fatal = true
+		if err != io.EOF {
+			e = err
+		}
+	}
+	return
 }
